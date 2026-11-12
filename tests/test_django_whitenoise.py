@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from contextlib import closing
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import pytest
 from django.conf import settings
@@ -118,7 +118,13 @@ def test_get_nonascii_file(server, static_files, _collect_static):
 
 @pytest.fixture(params=[True, False])
 def finder_static_files(request):
-    files = Files("static", js="app.js", index="with-index/index.html")
+    files = Files(
+        "static",
+        js="app.js",
+        index="with-index/index.html",
+        nested_index="nested/index-dir/index.html",
+        nonascii_index="nonascii-dir✓/index.html",
+    )
     with override_settings(
         STATICFILES_DIRS=[files.directory],
         WHITENOISE_USE_FINDERS=True,
@@ -189,6 +195,72 @@ def test_directory_path_without_trailing_slash_redirected(
     location = get_url_path(response.url, response.headers["Location"])
     assert response.status_code == 302
     assert location == settings.STATIC_URL + directory_path
+
+
+def test_directory_redirect_location_keeps_script_name(
+    finder_static_files, finder_server
+):
+    directory_path = finder_static_files.index_path.rpartition("/")[0] + "/"
+    directory_url = settings.STATIC_URL + directory_path.rstrip("/")
+    response = finder_server.get(directory_url, allow_redirects=False)
+    location = response.headers["Location"]
+    # A root-relative Location keeps the FORCE_SCRIPT_NAME prefix and cannot
+    # be interpreted as scheme-relative or pointing at another origin
+    assert location == settings.STATIC_URL + directory_path
+    assert location.startswith(settings.FORCE_SCRIPT_NAME + "/")
+    assert not location.startswith("//")
+
+
+def test_directory_redirect_does_not_loop(finder_static_files, finder_server):
+    directory_path = finder_static_files.index_path.rpartition("/")[0]
+    response = finder_server.get(settings.STATIC_URL + directory_path)
+    assert response.status_code == 200
+    assert response.content == finder_static_files.index_content
+
+
+def test_directory_redirect_with_encoded_separator(finder_static_files, finder_server):
+    directory_path = finder_static_files.nested_index_path.rpartition("/")[0] + "/"
+    encoded_url = settings.STATIC_URL + directory_path.replace(
+        "/nested/index-dir", "/nested%2Findex-dir"
+    ).rstrip("/")
+    response = finder_server.get(encoded_url, allow_redirects=False)
+    location = get_url_path(response.url, response.headers["Location"])
+    assert response.status_code == 302
+    assert location == settings.STATIC_URL + directory_path
+
+
+def test_index_file_redirect_with_encoded_separator(finder_static_files, finder_server):
+    directory_path = finder_static_files.nested_index_path.rpartition("/")[0] + "/"
+    encoded_url = settings.STATIC_URL + finder_static_files.nested_index_path.replace(
+        "/nested/index-dir", "/nested%2Findex-dir"
+    )
+    response = finder_server.get(encoded_url, allow_redirects=False)
+    location = get_url_path(response.url, response.headers["Location"])
+    assert response.status_code == 302
+    assert location == settings.STATIC_URL + directory_path
+
+
+def test_nonascii_directory_redirect(finder_static_files, finder_server):
+    directory_path = finder_static_files.nonascii_index_path.rpartition("/")[0] + "/"
+    directory_url = settings.STATIC_URL + directory_path.rstrip("/")
+    response = finder_server.get(directory_url, allow_redirects=False)
+    location = get_url_path(response.url, response.headers["Location"])
+    assert response.status_code == 302
+    assert location == quote(settings.STATIC_URL + directory_path)
+
+
+def test_consecutive_slashes_do_not_redirect(finder_static_files, finder_server):
+    directory_path = finder_static_files.nested_index_path.rpartition("/")[0]
+    double_slash_url = settings.STATIC_URL + directory_path.replace(
+        "/index-dir", "//index-dir"
+    )
+    encoded_url = settings.STATIC_URL + directory_path.replace(
+        "/index-dir", "%2F%2Findex-dir"
+    )
+    for url in (double_slash_url, encoded_url):
+        response = finder_server.get(url, allow_redirects=False)
+        assert response.status_code == 404
+        assert "Location" not in response.headers
 
 
 def test_whitenoise_file_response_has_only_one_header():

@@ -5,6 +5,11 @@ Changelog
 Unreleased
 ----------
 
+* Generate ``Location`` headers for index file redirects as root-relative URLs that include the mount prefix (``SCRIPT_NAME``), computed per request.
+
+  Previously, the redirects were relative to the request URL, so a request path containing encoded separators (such as ``%2F``) resolved to the wrong directory when the browser followed the redirect.
+  The new ``Location`` always resolves to the same site and the intended directory, regardless of how the request path was encoded.
+
 * Add Python 3.15 support.
 
   `PR #710 <https://github.com/evansd/whitenoise/pull/710>`__.

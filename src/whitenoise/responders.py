@@ -11,6 +11,8 @@ from io import BufferedIOBase
 from urllib.parse import quote
 from wsgiref.headers import Headers
 
+from whitenoise.string_utils import decode_path_info
+
 
 class Response:
     __slots__ = ("status", "headers", "file")
@@ -258,13 +260,26 @@ class StaticFile:
 
 
 class Redirect:
-    def __init__(self, location, headers=None):
-        headers = list(headers.items()) if headers else []
-        headers.append(("Location", quote(location.encode("utf8"))))
-        self.response = Response(HTTPStatus.FOUND, headers, None)
+    def __init__(self, to_url, headers=None):
+        self.headers = list(headers.items()) if headers else []
+        self.to_url = to_url
 
     def get_response(self, method, request_headers):
-        return self.response
+        # Build a root-relative Location including the mount prefix, so that
+        # the URL the browser resolves always decodes back to the same path
+        # we computed, regardless of how the request path was encoded (e.g.
+        # encoded separators such as %2F, consecutive slashes or non-ASCII
+        # characters in the raw request target)
+        script_name = decode_path_info(request_headers.get("SCRIPT_NAME", ""))
+        # A script name of "/" (or one with a trailing slash) would produce a
+        # Location starting with "//", which browsers parse as scheme-relative
+        script_name = script_name.rstrip("/")
+        location = quote((script_name + self.to_url).encode("utf8"))
+        return Response(
+            status=HTTPStatus.FOUND,
+            headers=[*self.headers, ("Location", location)],
+            file=None,
+        )
 
 
 class NotARegularFileError(Exception):

@@ -125,8 +125,8 @@ class WhiteNoise:
         if self.index_file is not None and url.endswith("/" + self.index_file):
             index_url = url[: -len(self.index_file)]
             index_no_slash = index_url.rstrip("/")
-            self.files[url] = self.redirect(url, index_url)
-            self.files[index_no_slash] = self.redirect(index_no_slash, index_url)
+            self.files[url] = self.redirect(index_url)
+            self.files[index_no_slash] = self.redirect(index_url)
             url = index_url
         static_file = self.get_static_file(path, url, stat_cache=stat_cache)
         self.files[url] = static_file
@@ -160,13 +160,13 @@ class WhiteNoise:
                 return self.get_static_file(path, url)
             elif url.endswith("/" + self.index_file):
                 if os.path.isfile(path):
-                    return self.redirect(url, url[: -len(self.index_file)])
+                    return self.redirect(url[: -len(self.index_file)])
             else:
                 try:
                     return self.get_static_file(path, url)
                 except IsDirectoryError:
                     if os.path.isfile(os.path.join(path, self.index_file)):
-                        return self.redirect(url, url + "/")
+                        return self.redirect(url + "/")
             raise MissingFileError(path)
 
         return self.get_static_file(path, url)
@@ -242,24 +242,19 @@ class WhiteNoise:
         """
         return False
 
-    def redirect(self, from_url, to_url):
+    def redirect(self, to_url):
         """
-        Return a relative 302 redirect
+        Return a 302 redirect to the given URL
 
-        We use relative redirects as we don't know the absolute URL the app is
-        being hosted under
+        The Location header is generated per-request as a root-relative URL
+        including the mount prefix (SCRIPT_NAME), as we don't know the
+        absolute URL the app is being hosted under
         """
-        if to_url == from_url + "/":
-            relative_url = from_url.split("/")[-1] + "/"
-        elif from_url == to_url + self.index_file:
-            relative_url = "./"
-        else:
-            raise ValueError(f"Cannot handle redirect: {from_url} > {to_url}")
         if self.max_age is not None:
             headers = {"Cache-Control": f"max-age={self.max_age}, public"}
         else:
             headers = {}
-        return Redirect(relative_url, headers=headers)
+        return Redirect(to_url, headers=headers)
 
 
 def scantree(root):

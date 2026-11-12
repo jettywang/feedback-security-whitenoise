@@ -9,7 +9,7 @@ import tempfile
 import time
 import warnings
 from contextlib import closing
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 from wsgiref.headers import Headers
 from wsgiref.simple_server import demo_app
 
@@ -29,6 +29,8 @@ def files():
         gzipped="compressed.css.gz",
         custom_mime="custom-mime.foobar",
         index="with-index/index.html",
+        nested_index="nested/index-dir/index.html",
+        nonascii_index="nonascii-dir✓/index.html",
     )
 
 
@@ -252,6 +254,65 @@ def test_directory_path_without_trailing_slash_redirected(server, files):
     location = urljoin(no_slash_url, response.headers["Location"])
     assert response.status_code == 302
     assert location == directory_url
+
+
+def test_directory_redirect_location_keeps_mount_prefix(server, files):
+    directory_url = files.index_url.rpartition("/")[0] + "/"
+    no_slash_url = directory_url.rstrip("/")
+    response = server.get(no_slash_url, allow_redirects=False)
+    location = response.headers["Location"]
+    # A root-relative Location keeps the mount prefix and cannot be
+    # interpreted as scheme-relative or pointing at another origin
+    assert location == no_slash_url + "/"
+    assert location.startswith(f"/{AppServer.PREFIX}/")
+    assert not location.startswith("//")
+
+
+def test_directory_redirect_does_not_loop(server, files):
+    no_slash_url = files.index_url.rpartition("/")[0]
+    response = server.get(no_slash_url)
+    assert response.status_code == 200
+    assert response.content == files.index_content
+
+
+def test_directory_redirect_with_encoded_separator(server, files):
+    directory_url = files.nested_index_url.rpartition("/")[0] + "/"
+    encoded_url = directory_url.replace("/nested/index-dir", "/nested%2Findex-dir")
+    encoded_url = encoded_url.rstrip("/")
+    response = server.get(encoded_url, allow_redirects=False)
+    location = urljoin(encoded_url, response.headers["Location"])
+    assert response.status_code == 302
+    assert location == directory_url
+
+
+def test_index_file_redirect_with_encoded_separator(server, files):
+    directory_url = files.nested_index_url.rpartition("/")[0] + "/"
+    encoded_url = files.nested_index_url.replace(
+        "/nested/index-dir", "/nested%2Findex-dir"
+    )
+    response = server.get(encoded_url, allow_redirects=False)
+    location = urljoin(encoded_url, response.headers["Location"])
+    assert response.status_code == 302
+    assert location == directory_url
+
+
+def test_nonascii_directory_redirect(server, files):
+    directory_url = files.nonascii_index_url.rpartition("/")[0] + "/"
+    no_slash_url = directory_url.rstrip("/")
+    response = server.get(no_slash_url, allow_redirects=False)
+    location = urljoin(no_slash_url, response.headers["Location"])
+    assert response.status_code == 302
+    assert location == quote(directory_url)
+
+
+def test_consecutive_slashes_do_not_redirect(server, files):
+    directory_url = files.nested_index_url.rpartition("/")[0]
+    double_slash_url = directory_url.replace("/index-dir", "//index-dir")
+    encoded_url = directory_url.replace("/index-dir", "%2F%2Findex-dir")
+    for url in (double_slash_url, encoded_url):
+        response = server.get(url, allow_redirects=False)
+        assert "Location" not in response.headers
+        assert_is_default_response(response)
 
 
 def test_request_initial_bytes(server, files):
