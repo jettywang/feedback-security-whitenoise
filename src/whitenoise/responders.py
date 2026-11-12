@@ -76,22 +76,21 @@ class StaticFile:
         files = self.get_file_stats(path, encodings, stat_cache)
         headers = self.get_headers(headers, files)
         self.last_modified = parsedate(headers["Last-Modified"])
-        self.etag = headers["ETag"]
-        self.not_modified_response = self.get_not_modified_response(headers)
+        self.etag = headers.get("ETag")
         self.alternatives = self.get_alternatives(headers, files)
 
     def get_response(self, method, request_headers):
         if method not in ("GET", "HEAD"):
             return NOT_ALLOWED_RESPONSE
-        if self.is_not_modified(request_headers):
-            return self.not_modified_response
-        path, headers = self.get_path_and_headers(request_headers)
+        path, headers, etag = self.get_path_and_headers(request_headers)
+        if self.is_not_modified(request_headers, etag):
+            return self.get_not_modified_response(headers)
         if method != "HEAD":
             file_handle = open(path, "rb")  # noqa: SIM115
         else:
             file_handle = None
         range_header = request_headers.get("HTTP_RANGE")
-        if range_header and self.is_if_range_satisfied(request_headers):
+        if range_header and self.is_if_range_satisfied(request_headers, etag):
             try:
                 return self.get_range_response(range_header, headers, file_handle)
             except ValueError:
@@ -184,7 +183,12 @@ class StaticFile:
             # mtime of 0 which we know is incorrect
             if mtime:
                 headers["Last-Modified"] = formatdate(mtime, usegmt=True)
-        if "ETag" not in headers:
+        # Track whether the ETag is one we generated, rather than supplied by
+        # the caller. A caller-supplied validator is treated as opaque and left
+        # untouched across representations; only our own ETag is rebuilt to
+        # describe each individual representation.
+        self.generated_etag = "ETag" not in headers
+        if self.generated_etag:
             last_modified = parsedate(headers["Last-Modified"])
             if last_modified:
                 timestamp = timegm(last_modified)
@@ -193,6 +197,8 @@ class StaticFile:
 
     @staticmethod
     def get_not_modified_response(headers):
+        if not isinstance(headers, Headers):
+            headers = Headers(headers)
         not_modified_headers = []
         for key in NOT_MODIFIED_HEADERS:
             if key in headers:
@@ -201,26 +207,43 @@ class StaticFile:
             status=HTTPStatus.NOT_MODIFIED, headers=not_modified_headers, file=None
         )
 
-    @staticmethod
-    def get_alternatives(base_headers, files):
+    def get_alternatives(self, base_headers, files):
         # Sort by size so that the smallest compressed alternative matches first
         alternatives = []
         files_by_size = sorted(files.items(), key=lambda i: i[1].size)
+        # Use the same timestamp as the identity ETag (the shared
+        # Last-Modified value) so every generated validator stays consistent,
+        # even if an encoded file happens to carry a different mtime.
+        timestamp = timegm(self.last_modified) if self.last_modified else None
         for encoding, file_entry in files_by_size:
             headers = Headers(base_headers.items())
             headers["Content-Length"] = str(file_entry.size)
+            if (
+                encoding
+                and self.generated_etag
+                and headers.get("ETag") is not None
+                and timestamp is not None
+            ):
+                # Content-encoded variants are distinct representations, so the
+                # ETag we generated from the identity file must not be reused
+                # for them. Rebuild it from each variant's own size, otherwise
+                # a validator taken from one representation (e.g. an If-Range
+                # header) could be treated as matching another.
+                headers["ETag"] = f'"{timestamp:x}-{file_entry.size:x}"'
             if encoding:
                 headers["Content-Encoding"] = encoding
                 encoding_re = re.compile(rf"\b{encoding}\b")
             else:
                 encoding_re = re.compile("")
-            alternatives.append((encoding_re, file_entry.path, headers.items()))
+            alternatives.append(
+                (encoding_re, file_entry.path, headers.items(), headers.get("ETag"))
+            )
         return alternatives
 
-    def is_not_modified(self, request_headers):
+    def is_not_modified(self, request_headers, etag):
         previous_etag = request_headers.get("HTTP_IF_NONE_MATCH")
         if previous_etag is not None:
-            return previous_etag == self.etag
+            return previous_etag == etag
         if self.last_modified is None:
             return False
         try:
@@ -232,7 +255,7 @@ class StaticFile:
             return last_requested_ts >= self.last_modified
         return False
 
-    def is_if_range_satisfied(self, request_headers):
+    def is_if_range_satisfied(self, request_headers, etag):
         # https://www.rfc-editor.org/rfc/rfc9110#section-13.1.5
         if_range = request_headers.get("HTTP_IF_RANGE")
         if if_range is None:
@@ -242,7 +265,7 @@ class StaticFile:
             # Weak entity tags never match
             return False
         if if_range.startswith('"'):
-            return if_range == self.etag
+            return if_range == etag
         if self.last_modified is None:
             return False
         return parsedate(if_range) == self.last_modified
@@ -252,9 +275,9 @@ class StaticFile:
         if accept_encoding == "*":
             accept_encoding = ""
         # These are sorted by size so first match is the best
-        for encoding_re, path, headers in self.alternatives:
+        for encoding_re, path, headers, etag in self.alternatives:
             if encoding_re.search(accept_encoding):
-                return path, headers
+                return path, headers, etag
 
 
 class Redirect:
