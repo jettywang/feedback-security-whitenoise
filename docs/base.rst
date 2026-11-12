@@ -101,8 +101,8 @@ Usage is simple:
 
 .. code-block:: console
 
-   usage: python -m whitenoise.compress [-h] [-q] [--no-gzip] [--no-brotli]
-                                        root [extensions ...]
+   usage: python -m whitenoise.compress [-h] [-q] [--check] [--no-gzip]
+                                        [--no-brotli] root [extensions ...]
 
    Search for all files inside <root> *not* matching <extensions> and produce
    compressed versions with '.gz' and '.br' suffixes (as long as this results in
@@ -118,6 +118,9 @@ Usage is simple:
    options:
      -h, --help   show this help message and exit
      -q, --quiet  Don't produce log output
+     --check      Don't compress; check that existing '.gz' and '.br' files are
+                  valid, up-to-date encodings of the originals next to them and
+                  exit with a non-zero status if any problems are found
      --no-gzip    Don't produce gzip '.gz' files
      --no-brotli  Don't produce brotli '.br' files
 
@@ -127,6 +130,44 @@ You can either run this during development and commit your compressed files to
 your repository, or you can run this as part of your build and deploy processes.
 (Note that this is handled automatically in Django if you're using the custom
 storage backend.)
+
+
+.. _checking-compressed-files:
+
+Checking compressed files
+-------------------------
+
+WhiteNoise serves ``.gz`` and ``.br`` files purely based on their filename: it
+assumes that ``app.js.gz`` is the gzip-compressed form of the ``app.js`` sitting
+next to it, and never re-checks this when handling requests. If a build or
+deploy is interrupted, or artifacts from different releases get mixed together,
+a stale or corrupt compressed file can end up being served for an otherwise
+up-to-date URL.
+
+To catch this before it reaches users, the command line utility can verify a
+directory of files that is about to be deployed:
+
+.. code-block:: console
+
+   $ python -m whitenoise.compress --check /path/to/static/files
+
+This decompresses every ``.gz`` and ``.br`` file it finds and reports any which
+don't match the original file next to them (stale), can't be decompressed at
+all (corrupt), or whose original file no longer exists (orphaned). Each problem
+is printed with the URL and encoding affected, and the command exits with a
+non-zero status if any are found, so it can gate a release pipeline.
+
+WhiteNoise also runs this check once at startup (in non-"autorefresh" mode) and
+logs a warning for every problem found, for example::
+
+    Compressed static file problem detected: /static/app.js [gzip]: stale
+    compressed variant /app/static/app.js.gz: decompressed content does not
+    match the original file
+
+This is a one-off check at startup; individual requests are served as before,
+with no per-request decompression. To disable it, pass
+``check_compressed_files=False`` when instantiating ``WhiteNoise`` (Django
+users can set :any:`WHITENOISE_CHECK_COMPRESSED_FILES` to ``False``).
 
 
 .. _caching:

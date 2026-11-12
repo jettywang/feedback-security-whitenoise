@@ -71,6 +71,10 @@ class WhiteNoiseMiddleware(WhiteNoise):
             immutable_file_test = settings.WHITENOISE_IMMUTABLE_FILE_TEST
         except AttributeError:
             immutable_file_test = None
+        try:
+            check_compressed_files = settings.WHITENOISE_CHECK_COMPRESSED_FILES
+        except AttributeError:
+            check_compressed_files = True
 
         super().__init__(
             application=None,
@@ -82,6 +86,7 @@ class WhiteNoiseMiddleware(WhiteNoise):
             add_headers_function=add_headers_function,
             index_file=index_file,
             immutable_file_test=immutable_file_test,
+            check_compressed_files=check_compressed_files,
         )
 
         try:

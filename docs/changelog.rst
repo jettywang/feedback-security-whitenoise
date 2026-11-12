@@ -5,6 +5,12 @@ Changelog
 Unreleased
 ----------
 
+* Add a compressed file integrity check, to catch stale, corrupt, or orphaned ``.gz``/``.br`` files before they get served.
+
+  WhiteNoise serves compressed variants purely based on filename, so a build or deploy that leaves an outdated ``app.js.gz`` next to a new ``app.js`` results in gzip-enabled clients receiving the old content, even for cache-busted URLs.
+  WhiteNoise now verifies compressed variants once at startup and logs a warning naming the URL and encoding of every problem found; this can be disabled with the new ``check_compressed_files`` argument or the ``WHITENOISE_CHECK_COMPRESSED_FILES`` Django setting.
+  The command line utility also grows a ``--check`` mode, ``python -m whitenoise.compress --check <root>``, which reports the same problems and exits non-zero, so releases can be gated on it.
+
 * Add Python 3.15 support.
 
   `PR #710 <https://github.com/evansd/whitenoise/pull/710>`__.

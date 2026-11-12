@@ -378,6 +378,22 @@ arguments upper-cased with a 'WHITENOISE\_' prefix.
     just skip over them.
 
 
+.. attribute:: WHITENOISE_CHECK_COMPRESSED_FILES
+
+    :default: ``True``
+
+    Check, once at startup, that any ``.gz`` and ``.br`` files found next to
+    static files are valid, up-to-date encodings of them, and log a warning
+    naming the URL and encoding for every stale, corrupt or orphaned
+    compressed file found.
+
+    This guards against stale compressed files being served when a build or
+    deploy is interrupted or artifacts from different releases get mixed
+    together. It is a one-off startup check; no decompression happens
+    per-request. See :ref:`checking-compressed-files` for details and for the
+    equivalent pre-release command line check.
+
+
 .. attribute:: WHITENOISE_ADD_HEADERS_FUNCTION
 
     :default: ``None``

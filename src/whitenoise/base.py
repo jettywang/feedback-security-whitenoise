@@ -45,6 +45,11 @@ class WhiteNoise:
         add_headers_function: Callable[[Headers, str, str], None] | None = None,
         index_file: str | bool | None = None,
         immutable_file_test: Callable | str | None = None,
+        # Verify, once at startup, that any '.gz'/'.br' files found next to
+        # static files are valid, up-to-date encodings of them. Problems are
+        # reported as warnings; serving is unaffected and no decompression
+        # happens per-request.
+        check_compressed_files: bool = True,
     ):
         self.autorefresh = autorefresh
         self.max_age = max_age
@@ -57,6 +62,7 @@ class WhiteNoise:
             self.index_file = index_file
         else:
             self.index_file = None
+        self.check_compressed_files = check_compressed_files
 
         if immutable_file_test is not None:
             if not callable(immutable_file_test):
@@ -106,8 +112,22 @@ class WhiteNoise:
         else:
             if os.path.isdir(root):
                 self.update_files_dictionary(root, prefix)
+                if self.check_compressed_files:
+                    self.warn_about_compressed_file_issues(root, prefix)
             else:
                 warnings.warn(f"No directory at: {root}", stacklevel=3)
+
+    @staticmethod
+    def warn_about_compressed_file_issues(root, prefix):
+        # Imported here so that `python -m whitenoise.compress` doesn't find
+        # itself already in sys.modules (which triggers a RuntimeWarning)
+        from whitenoise.compress import check_compressed_files
+
+        for issue in check_compressed_files(root, prefix):
+            warnings.warn(
+                f"Compressed static file problem detected: {issue}",
+                stacklevel=3,
+            )
 
     def update_files_dictionary(self, root, prefix):
         # Build a mapping from paths to the results of `os.stat` calls
