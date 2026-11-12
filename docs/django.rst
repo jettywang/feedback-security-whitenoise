@@ -365,6 +365,32 @@ arguments upper-cased with a 'WHITENOISE\_' prefix.
 .. __: https://www.w3.org/TR/cors/#security
 
 
+.. attribute:: WHITENOISE_ALLOWED_ORIGINS
+
+    :default: ``None``
+
+    A mapping from URL prefixes to origins allowed to make cross-origin
+    requests for files under those prefixes. For example: ::
+
+        WHITENOISE_ALLOWED_ORIGINS = {
+            "/static/fonts/": (
+                "https://example.com",
+                "https://www.example.com",
+            ),
+        }
+
+    Requests from listed origins receive an
+    ``Access-Control-Allow-Origin`` header containing the request origin.
+    Requests from other origins, and requests without an ``Origin`` header, do
+    not receive this header. Files under a configured prefix also receive
+    ``Vary: Origin`` so shared caches keep responses for different origins
+    separate.
+
+    This overrides :any:`WHITENOISE_ALLOW_ALL_ORIGINS` for the configured
+    prefixes; other files continue to use the ``WHITENOISE_ALLOW_ALL_ORIGINS``
+    setting.
+
+
 .. attribute:: WHITENOISE_SKIP_COMPRESS_EXTENSIONS
 
     :default: ``('jpg', 'jpeg', 'png', 'gif', 'webp', 'zip', 'gz', 'tgz', 'bz2', 'tbz', 'xz', 'br', 'swf', 'flv', 'woff', 'woff2', '3gp', '3gpp', 'asf', 'avi', 'm4v', 'mov', 'mp4', 'mpeg', 'mpg', 'webm', 'wmv')``

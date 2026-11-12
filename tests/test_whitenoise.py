@@ -198,6 +198,120 @@ def test_response_has_allow_origin_header(server, files):
     assert response.headers.get("Access-Control-Allow-Origin") == "*"
 
 
+def get_wsgi_response(application, path, method="GET", headers=None):
+    environ = {
+        "PATH_INFO": path,
+        "REQUEST_METHOD": method,
+    }
+    for name, value in (headers or {}).items():
+        environ["HTTP_" + name.upper().replace("-", "_")] = value
+
+    captured = {}
+
+    def start_response(status, response_headers):
+        captured["status"] = status
+        captured["headers"] = response_headers
+
+    response = application(environ, start_response)
+    try:
+        body = b"".join(response)
+    finally:
+        close = getattr(response, "close", None)
+        if close is not None:
+            close()
+    captured["body"] = body
+    return captured
+
+
+def test_allowed_origins_for_prefix_uses_vary_origin():
+    assets = Files("assets", gzip="compressed.css")
+    allowed_origin = "https://allowed.example"
+    denied_origin = "https://denied.example"
+    application = WhiteNoise(
+        demo_app,
+        max_age=1000,
+        allowed_origins={"/fonts": [allowed_origin]},
+    )
+    application.add_files(assets.directory, prefix="/fonts")
+    application.add_files(assets.directory, prefix="/public")
+    public_path = f"/public/{assets.gzip_path}"
+    restricted_path = f"/fonts/{assets.gzip_path}"
+
+    public_response = get_wsgi_response(application, public_path)
+    public_headers = Headers(public_response["headers"])
+    assert public_headers["Access-Control-Allow-Origin"] == "*"
+    assert public_headers["Vary"] == "Accept-Encoding"
+
+    requests_by_origin = [
+        (allowed_origin, allowed_origin),
+        (denied_origin, None),
+        (None, None),
+    ]
+    for origin, expected_allow_origin in requests_by_origin:
+        request_headers = {"Accept-Encoding": "gzip"}
+        if origin is not None:
+            request_headers["Origin"] = origin
+
+        compressed_response = get_wsgi_response(
+            application, restricted_path, headers=request_headers
+        )
+        compressed_headers = Headers(compressed_response["headers"])
+        assert compressed_response["status"].startswith("200 ")
+        assert compressed_headers["Content-Encoding"] == "gzip"
+        assert compressed_headers["Vary"] == "Accept-Encoding, Origin"
+        assert compressed_headers["Cache-Control"] == "max-age=1000, public"
+        assert compressed_headers.get("Access-Control-Allow-Origin") == (
+            expected_allow_origin
+        )
+
+        etag = compressed_headers["ETag"]
+        not_modified_response = get_wsgi_response(
+            application,
+            restricted_path,
+            headers={**request_headers, "If-None-Match": etag},
+        )
+        not_modified_headers = Headers(not_modified_response["headers"])
+        assert not_modified_response["status"].startswith("304 ")
+        assert not_modified_headers["Vary"] == "Accept-Encoding, Origin"
+        assert not_modified_headers.get("Access-Control-Allow-Origin") == (
+            expected_allow_origin
+        )
+
+        range_response = get_wsgi_response(
+            application,
+            restricted_path,
+            headers={**request_headers, "Range": "bytes=0-3"},
+        )
+        range_headers = Headers(range_response["headers"])
+        assert range_response["status"].startswith("206 ")
+        assert range_headers["Vary"] == "Accept-Encoding, Origin"
+        assert range_headers["Cache-Control"] == "max-age=1000, public"
+        assert range_headers.get("Access-Control-Allow-Origin") == (
+            expected_allow_origin
+        )
+
+
+def test_allowed_origins_for_prefix_uses_longest_matching_prefix():
+    application = WhiteNoise(
+        demo_app,
+        allowed_origins={
+            "/fonts/": ["https://first.example"],
+            "/fonts/extra/": ["https://second.example"],
+        },
+    )
+    application.add_files(Files("assets").directory, prefix="/fonts/extra")
+    static_file = application.files["/fonts/extra/compressed.css"]
+
+    response = static_file.get_response(
+        "GET", {"HTTP_ORIGIN": "https://second.example"}
+    )
+    response.file.close()
+    headers = Headers(response.headers)
+
+    assert headers["Access-Control-Allow-Origin"] == "https://second.example"
+    assert "https://first.example" not in static_file.allowed_origins
+
+
 def test_response_has_correct_content_length_header(server, files):
     response = server.get(files.js_url)
     length = int(response.headers["Content-Length"])

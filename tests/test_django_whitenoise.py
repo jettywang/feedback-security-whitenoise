@@ -10,6 +10,7 @@ from django.conf import settings
 from django.contrib.staticfiles import finders, storage
 from django.core.management import call_command
 from django.core.wsgi import get_wsgi_application
+from django.test import RequestFactory
 from django.test.utils import override_settings
 from django.utils.functional import empty
 
@@ -101,6 +102,24 @@ def test_get_brotli(server, static_files, _collect_static):
     assert response.content == static_files.js_content
     assert response.headers["Content-Encoding"] == "br"
     assert response.headers["Vary"] == "Accept-Encoding"
+
+
+def test_allowed_origins_setting(_collect_static):
+    allowed_origin = "https://allowed.example"
+    url = "/static/app.js"
+    with override_settings(
+        STATIC_URL="/static/",
+        WHITENOISE_STATIC_PREFIX="/static/",
+        WHITENOISE_ALLOWED_ORIGINS={"/static/": [allowed_origin]},
+    ):
+        middleware = WhiteNoiseMiddleware(get_response=lambda request: None)
+        request = RequestFactory().get(url, HTTP_ORIGIN=allowed_origin)
+        response = middleware(request)
+
+    assert response.status_code == 200
+    assert response.headers["Access-Control-Allow-Origin"] == allowed_origin
+    assert response.headers["Vary"] == "Accept-Encoding, Origin"
+    response.close()
 
 
 def test_no_content_type_when_not_modified(server, static_files, _collect_static):

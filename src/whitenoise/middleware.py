@@ -52,6 +52,10 @@ class WhiteNoiseMiddleware(WhiteNoise):
         except AttributeError:
             allow_all_origins = True
         try:
+            allowed_origins = settings.WHITENOISE_ALLOWED_ORIGINS
+        except AttributeError:
+            allowed_origins = None
+        try:
             charset = settings.WHITENOISE_CHARSET
         except AttributeError:
             charset = "utf-8"
@@ -77,6 +81,7 @@ class WhiteNoiseMiddleware(WhiteNoise):
             autorefresh=autorefresh,
             max_age=max_age,
             allow_all_origins=allow_all_origins,
+            allowed_origins=allowed_origins,
             charset=charset,
             mimetypes=mimetypes,
             add_headers_function=add_headers_function,

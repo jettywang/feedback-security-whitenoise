@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from io import BytesIO
 
 from django.test import SimpleTestCase
+from wsgiref.headers import Headers
 
-from whitenoise.responders import SlicedFile
+from whitenoise.responders import SlicedFile, StaticFile
 
 
 class SlicedFileTests(SimpleTestCase):
@@ -40,3 +42,24 @@ class SlicedFileTests(SimpleTestCase):
         # Deleting the sliced file should not call close again.
         del sliced_file
         assert calls == 1
+
+
+class StaticFileTests(SimpleTestCase):
+    def test_allowed_origins_vary_header_on_unsatisfiable_range(self):
+        static_file = StaticFile(
+            __file__,
+            [("Vary", "Accept-Encoding")],
+            allowed_origins=frozenset({"https://allowed.example"}),
+        )
+        response = static_file.get_response(
+            "GET",
+            {
+                "HTTP_ORIGIN": "https://denied.example",
+                "HTTP_RANGE": f"bytes={os.path.getsize(__file__)}-",
+            },
+        )
+        headers = Headers(response.headers)
+
+        self.assertEqual(response.status.value, 416)
+        self.assertEqual(headers["Vary"], "Accept-Encoding, Origin")
+        self.assertIsNone(headers.get("Access-Control-Allow-Origin"))

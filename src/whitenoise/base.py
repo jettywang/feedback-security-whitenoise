@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from posixpath import normpath
 from wsgiref.headers import Headers
 from wsgiref.util import FileWrapper
@@ -40,6 +40,7 @@ class WhiteNoise:
         # webfonts in Firefox) still work as expected when your static files are
         # served from a CDN, rather than your primary domain.
         allow_all_origins: bool = True,
+        allowed_origins: dict[str, Collection[str]] | None = None,
         charset: str = "utf-8",
         mimetypes: dict[str, str] | None = None,
         add_headers_function: Callable[[Headers, str, str], None] | None = None,
@@ -49,6 +50,7 @@ class WhiteNoise:
         self.autorefresh = autorefresh
         self.max_age = max_age
         self.allow_all_origins = allow_all_origins
+        self.allowed_origins = self.normalize_allowed_origins(allowed_origins)
         self.charset = charset
         self.add_headers_function = add_headers_function
         if index_file is True:
@@ -203,20 +205,39 @@ class WhiteNoise:
                 return uncompressed_path in stat_cache
         return False
 
+    @staticmethod
+    def normalize_allowed_origins(allowed_origins):
+        if allowed_origins is None:
+            return None
+        return {
+            ensure_leading_trailing_slash(prefix): frozenset(origins)
+            for prefix, origins in allowed_origins.items()
+        }
+
+    def get_allowed_origins(self, url):
+        if self.allowed_origins is None:
+            return None
+        for prefix in sorted(self.allowed_origins, reverse=True):
+            if url.startswith(prefix):
+                return self.allowed_origins[prefix]
+        return None
+
     def get_static_file(self, path, url, stat_cache=None):
         # Optimization: bail early if file does not exist
         if stat_cache is None and not os.path.exists(path):
             raise MissingFileError(path)
         headers = Headers([])
+        allowed_origins = self.get_allowed_origins(url)
         self.add_mime_headers(headers, path, url)
         self.add_cache_headers(headers, path, url)
-        if self.allow_all_origins:
+        if allowed_origins is None and self.allow_all_origins:
             headers["Access-Control-Allow-Origin"] = "*"
         if self.add_headers_function is not None:
             self.add_headers_function(headers, path, url)
         return StaticFile(
             path,
             headers.items(),
+            allowed_origins=allowed_origins,
             stat_cache=stat_cache,
             encodings={"gzip": path + ".gz", "br": path + ".br"},
         )

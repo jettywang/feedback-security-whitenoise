@@ -5,6 +5,12 @@ Changelog
 Unreleased
 ----------
 
+* Add ``allowed_origins`` configuration for restricting cross-origin access to
+  files under selected URL prefixes while preserving the existing public
+  ``Access-Control-Allow-Origin: *`` behaviour elsewhere. Configured prefixes
+  receive ``Vary: Origin`` so shared caches distinguish responses for different
+  origins.
+
 * Add Python 3.15 support.
 
   `PR #710 <https://github.com/evansd/whitenoise/pull/710>`__.

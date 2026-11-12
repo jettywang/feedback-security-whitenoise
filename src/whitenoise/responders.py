@@ -40,7 +40,22 @@ NOT_MODIFIED_HEADERS = (
     "Access-Control-Allow-Origin",
 )
 
-RANGE_NOT_SATISFIABLE_HEADERS = frozenset({"access-control-allow-origin"})
+RANGE_NOT_SATISFIABLE_HEADERS = frozenset(
+    ("access-control-allow-origin", "vary"),
+)
+
+
+def add_vary_header(headers, header_name):
+    existing = headers.get("Vary")
+    if existing is None:
+        headers["Vary"] = header_name
+        return
+    vary_headers = [value.strip() for value in existing.split(",")]
+    if not any(
+        header_name.lower() == existing_header.lower()
+        for existing_header in vary_headers
+    ):
+        headers["Vary"] = f"{existing.rstrip()}, {header_name}"
 
 
 class SlicedFile(BufferedIOBase):
@@ -72,19 +87,28 @@ class SlicedFile(BufferedIOBase):
 
 
 class StaticFile:
-    def __init__(self, path, headers, encodings=None, stat_cache=None):
+    def __init__(
+        self,
+        path,
+        headers,
+        encodings=None,
+        stat_cache=None,
+        allowed_origins=None,
+    ):
+        self.allowed_origins = allowed_origins
         files = self.get_file_stats(path, encodings, stat_cache)
         headers = self.get_headers(headers, files)
         self.last_modified = parsedate(headers["Last-Modified"])
         self.etag = headers["ETag"]
-        self.not_modified_response = self.get_not_modified_response(headers)
+        self.not_modified_headers = headers
+        self.not_modified_response = self.get_not_modified_response()
         self.alternatives = self.get_alternatives(headers, files)
 
     def get_response(self, method, request_headers):
         if method not in ("GET", "HEAD"):
             return NOT_ALLOWED_RESPONSE
         if self.is_not_modified(request_headers):
-            return self.not_modified_response
+            return self.get_not_modified_response(request_headers)
         path, headers = self.get_path_and_headers(request_headers)
         if method != "HEAD":
             file_handle = open(path, "rb")  # noqa: SIM115
@@ -93,13 +117,17 @@ class StaticFile:
         range_header = request_headers.get("HTTP_RANGE")
         if range_header and self.is_if_range_satisfied(request_headers):
             try:
-                return self.get_range_response(range_header, headers, file_handle)
+                response = self.get_range_response(range_header, headers, file_handle)
             except ValueError:
                 # If we can't interpret the Range request for any reason then
                 # just ignore it and return the standard response (this
                 # behaviour is allowed by the spec)
                 pass
-        return Response(HTTPStatus.OK, headers, file_handle)
+            else:
+                return self.apply_cors_headers(response, request_headers)
+        return self.apply_cors_headers(
+            Response(HTTPStatus.OK, headers, file_handle), request_headers
+        )
 
     def get_range_response(self, range_header, base_headers, file_handle):
         headers = []
@@ -177,7 +205,9 @@ class StaticFile:
         headers = Headers(headers_list)
         main_file = files[None]
         if len(files) > 1:
-            headers["Vary"] = "Accept-Encoding"
+            add_vary_header(headers, "Accept-Encoding")
+        if self.allowed_origins is not None:
+            add_vary_header(headers, "Origin")
         if "Last-Modified" not in headers:
             mtime = main_file.mtime
             # Not all filesystems report mtimes, and sometimes they report an
@@ -191,15 +221,30 @@ class StaticFile:
                 headers["ETag"] = f'"{timestamp:x}-{main_file.size:x}"'
         return headers
 
-    @staticmethod
-    def get_not_modified_response(headers):
+    def get_not_modified_response(self, request_headers=None):
         not_modified_headers = []
         for key in NOT_MODIFIED_HEADERS:
-            if key in headers:
-                not_modified_headers.append((key, headers[key]))
-        return Response(
-            status=HTTPStatus.NOT_MODIFIED, headers=not_modified_headers, file=None
+            if key in self.not_modified_headers:
+                not_modified_headers.append(
+                    (key, self.not_modified_headers[key]),
+                )
+        response = Response(
+            status=HTTPStatus.NOT_MODIFIED,
+            headers=not_modified_headers,
+            file=None,
         )
+        return self.apply_cors_headers(response, request_headers)
+
+    def apply_cors_headers(self, response, request_headers):
+        if self.allowed_origins is None or request_headers is None:
+            return response
+        origin = request_headers.get("HTTP_ORIGIN")
+        headers = Headers(response.headers)
+        del headers["Access-Control-Allow-Origin"]
+        if origin is not None and origin in self.allowed_origins:
+            headers["Access-Control-Allow-Origin"] = origin
+        response.headers = headers.items()
+        return response
 
     @staticmethod
     def get_alternatives(base_headers, files):

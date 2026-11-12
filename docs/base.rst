@@ -274,6 +274,30 @@ sub-classing WhiteNoise and setting the attributes directly.
 
 .. __: https://www.w3.org/TR/cors/#security
 
+.. attribute:: allowed_origins
+
+    :default: ``None``
+
+    A mapping from URL prefixes to origins allowed to make cross-origin
+    requests for files under those prefixes. For example: ::
+
+        {
+            "/static/fonts/": (
+                "https://example.com",
+                "https://www.example.com",
+            ),
+        }
+
+    Requests from listed origins receive an
+    ``Access-Control-Allow-Origin`` header containing the request origin.
+    Requests from other origins, and requests without an ``Origin`` header, do
+    not receive this header. Files under a configured prefix also receive
+    ``Vary: Origin`` so shared caches keep responses for different origins
+    separate.
+
+    This overrides :any:`allow_all_origins` for the configured prefixes; other
+    files continue to use the ``allow_all_origins`` setting.
+
 .. attribute:: add_headers_function
 
     :default: ``None``
